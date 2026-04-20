@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gawynt Table Tennis | Pro Edition</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@1,900&display=swap');
+
+        :root {
+            --bg-color: #ffb800; /* The iconic yellow */
+            --court-color: #2e8b57; /* The deep green */
+            --p1-color: #3498db; /* Blue */
+            --p2-color: #e74c3c; /* Red */
+            --line-color: #ffffff;
+            --border-color: #000000;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: #222;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        /* --- UI Elements --- */
+        #game-wrapper {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            font-family: 'Montserrat', sans-serif;
+            font-style: italic;
+            font-size: 42px;
+            margin: 0;
+            text-transform: uppercase;
+            letter-spacing: -2px;
+            color: var(--border-color);
+            -webkit-text-stroke: 1px #fff;
+        }
+
+        #scoreboard {
+            display: flex;
+            justify-content: space-between;
+            width: 400px;
+            margin-bottom: 10px;
+        }
+
+        .score-box {
+            background: #fff;
+            border: 4px solid var(--border-color);
+            padding: 10px 20px;
+            border-radius: 12px;
+            font-weight: 900;
+            font-size: 24px;
+            box-shadow: 4px 4px 0px rgba(0,0,0,0.2);
+        }
+
+        /* --- Canvas Setup --- */
+        #canvas-container {
+            position: relative;
+            border: 8px solid var(--border-color);
+            box-shadow: 20px 20px 0px rgba(0,0,0,0.1);
+            background-color: var(--court-color);
+        }
+
+        canvas {
+            display: block;
+            cursor: none;
+        }
+
+        /* --- Overlays --- */
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            z-index: 100;
+            text-align: center;
+            transition: opacity 0.3s;
+        }
+
+        .hidden { display: none; opacity: 0; pointer-events: none; }
+
+        .btn {
+            background: var(--bg-color);
+            border: 3px solid var(--border-color);
+            padding: 12px 30px;
+            font-size: 18px;
+            font-weight: bold;
+            text-transform: uppercase;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: transform 0.1s;
+        }
+
+        .btn:hover { transform: scale(1.05); }
+        .btn:active { transform: scale(0.95); }
+
+        #status-indicator {
+            margin-top: 15px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-wrapper">
+        <div id="header">
+            <h1>GAWYNT</h1>
+            <div style="font-size: 14px; font-weight: bold; margin-top: -5px;">TABLE TENNIS</div>
+        </div>
+
+        <div id="scoreboard">
+            <div class="score-box" style="color: var(--p2-color)">P2: <span id="score-p2">0</span></div>
+            <div class="score-box" style="color: var(--p1-color)">P1: <span id="score-p1">0</span></div>
+        </div>
+
+        <div id="canvas-container">
+            <canvas id="gameCanvas" width="450" height="650"></canvas>
+            
+            <div id="menu-overlay" class="overlay">
+                <h2>READY FOR THE MATCH?</h2>
+                <button class="btn" id="start-btn">JOIN ARENA</button>
+            </div>
+
+            <div id="waiting-overlay" class="overlay hidden">
+                <h2>WAITING FOR OPPONENT...</h2>
+                <div class="loader"></div>
+            </div>
+
+            <div id="gameover-overlay" class="overlay hidden">
+                <h2 id="winner-text">PLAYER 1 WINS!</h2>
+                <button class="btn" onclick="location.reload()">REMATCH</button>
+            </div>
+        </div>
+
+        <div id="status-indicator">Initializing...</div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, set, onValue, update, onDisconnect, get } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // --- Configuration ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBuWWnqDX5mUra5pF3uuBxEVSKjcESifTk",
+            authDomain: "gawynt-hub.firebaseapp.com",
+            databaseURL: "https://gawynt-hub-default-rtdb.firebaseio.com",
+            projectId: "gawynt-hub",
+            storageBucket: "gawynt-hub.firebasestorage.app",
+            messagingSenderId: "330651852035",
+            appId: "1:330651852035:web:db931f867da21b6a519d36"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // --- Constants & Globals ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const PADDLE_RADIUS = 35;
+        const BALL_RADIUS = 10;
+        const INITIAL_SPEED = 5;
+        const SPEED_INCREMENT = 0.2;
+        const MAX_SCORE = 11;
+
+        let playerRole = null; // 'p1', 'p2', or 'spectator'
+        let gameState = 'MENU'; // MENU, WAITING, PLAYING, GAMEOVER
+        let particles = [];
+        let screenShake = 0;
+
+        // The Local Cache of Game Data
+        let roomData = {
+            p1: { x: 225, score: 0, active: false },
+            p2: { x: 225, score: 0, active: false },
+            ball: { x: 225, y: 325, dx: 5, dy: 5 },
+            status: 'lobby'
+        };
+
+        const roomRef = ref(db, 'pro_tennis_room');
+
+        // --- Particle System ---
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 5 + 2;
+                this.speedX = (Math.random() - 0.5) * 8;
+                this.speedY = (Math.random() - 0.5) * 8;
+                this.life = 1.0;
+            }
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                this.life -= 0.03;
+            }
+            draw(ctx) {
+                ctx.fillStyle = `rgba(0, 0, 0, ${this.life})`;
+                ctx.fillRect(this.x, this.y, this.size, this.size);
+            }
+        }
+
+        function createBurst(x, y) {
+            for (let i = 0; i < 15; i++) {
+                particles.push(new Particle(x, y, '#000'));
+            }
+            screenShake = 10;
+        }
+
+        // --- Networking Logic ---
+        async function joinGame() {
+            const snap = await get(roomRef);
+            const val = snap.val();
+
+            if (!val || !val.p1.active) {
+                playerRole = 'p1';
+                await set(roomRef, {
+                    p1: { x: 225, score: 0, active: true },
+                    p2: { x: 225, score: 0, active: false },
+                    ball: { x: 225, y: 325, dx: INITIAL_SPEED, dy: INITIAL_SPEED },
+                    status: 'waiting'
+                });
+                onDisconnect(ref(db, 'pro_tennis_room/p1')).update({ active: false });
+            } else if (!val.p2.active) {
+                playerRole = 'p2';
+                await update(ref(db, 'pro_tennis_room/p2'), { active: true });
+                await update(roomRef, { status: 'playing' });
+                onDisconnect(ref(db, 'pro_tennis_room/p2')).update({ active: false });
+            } else {
+                playerRole = 'spectator';
+            }
+
+            document.getElementById('menu-overlay').classList.add('hidden');
+            if (playerRole === 'p1' && roomData.status === 'waiting') {
+                document.getElementById('waiting-overlay').classList.remove('hidden');
+            }
+        }
+
+        onValue(roomRef, (snap) => {
+            const val = snap.val();
+            if (!val) return;
+            
+            // Detection for collision visual (if ball speed/direction changed drastically)
+            if (Math.abs(val.ball.dy) !== Math.abs(roomData.ball.dy)) {
+                createBurst(val.ball.x, val.ball.y);
+            }
+
+            roomData = val;
+            
+            // Handle Overlay Visibility
+            if (roomData.status === 'playing') {
+                document.getElementById('waiting-overlay').classList.add('hidden');
+                gameState = 'PLAYING';
+            }
+
+            document.getElementById('score-p1').innerText = roomData.p1.score;
+            document.getElementById('score-p2').innerText = roomData.p2.score;
+
+            if (roomData.p1.score >= MAX_SCORE || roomData.p2.score >= MAX_SCORE) {
+                gameState = 'GAMEOVER';
+                document.getElementById('gameover-overlay').classList.remove('hidden');
+                document.getElementById('winner-text').innerText = 
+                    roomData.p1.score >= MAX_SCORE ? "BLUE PLAYER WINS!" : "RED PLAYER WINS!";
+            }
+        });
+
+        // --- Input Handling ---
+        canvas.addEventListener('mousemove', (e) => {
+            if (gameState !== 'PLAYING' || playerRole === 'spectator') return;
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            
+            // Logic to keep paddle on screen
+            const clampedX = Math.max(PADDLE_RADIUS, Math.min(canvas.width - PADDLE_RADIUS, mouseX));
+            
+            update(ref(db, `pro_tennis_room/${playerRole}`), { x: clampedX });
+        });
+
+        // --- Core Game Functions ---
+        function updatePhysics() {
+            // Only P1 (the host) calculates physics to keep players in sync
+            if (playerRole !== 'p1' || gameState !== 'PLAYING') return;
+
+            let { ball, p1, p2 } = roomData;
+
+            // Movement
+            ball.x += ball.dx;
+            ball.y += ball.dy;
+
+            // Wall Bounce
+            if (ball.x < BALL_RADIUS || ball.x > canvas.width - BALL_RADIUS) {
+                ball.dx *= -1;
+            }
+
+            // Paddle Collisions (Circle vs Circle)
+            // P1 (Bottom)
+            const distP1 = Math.hypot(ball.x - p1.x, ball.y - (canvas.height - 50));
+            if (distP1 < PADDLE_RADIUS + BALL_RADIUS && ball.dy > 0) {
+                handleBounce(ball, p1.x);
+            }
+
+            // P2 (Top)
+            const distP2 = Math.hypot(ball.x - p2.x, ball.y - 50);
+            if (distP2 < PADDLE_RADIUS + BALL_RADIUS && ball.dy < 0) {
+                handleBounce(ball, p2.x);
+            }
+
+            // Scoring
+            if (ball.y < 0) {
+                p1.score++;
+                resetBall(1);
+            } else if (ball.y > canvas.height) {
+                p2.score++;
+                resetBall(-1);
+            }
+
+            update(roomRef, { ball, p1, p2 });
+        }
+
+        function handleBounce(ball, paddleX) {
+            ball.dy *= -1;
+            // Angle adjustment based on where it hits the paddle
+            const hitPoint = (ball.x - paddleX) / PADDLE_RADIUS;
+            ball.dx = hitPoint * 7;
+            // Speed increment
+            ball.dy += (ball.dy > 0 ? SPEED_INCREMENT : -SPEED_INCREMENT);
+        }
+
+        function resetBall(dir) {
+            roomData.ball = {
+                x: canvas.width / 2,
+                y: canvas.height / 2,
+                dx: (Math.random() - 0.5) * 6,
+                dy: INITIAL_SPEED * dir
+            };
+        }
+
+        // --- Rendering Engine ---
+        function draw() {
+            // Shake effect
+            ctx.save();
+            if (screenShake > 0) {
+                ctx.translate(Math.random() * screenShake, Math.random() * screenShake);
+                screenShake *= 0.9;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 1. Draw Court Lines
+            ctx.strokeStyle = "rgba(255,255,255,0.3)";
+            ctx.lineWidth = 4;
+            // Center line
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height / 2);
+            ctx.lineTo(canvas.width, canvas.height / 2);
+            ctx.stroke();
+            // Vertical line
+            ctx.beginPath();
+            ctx.setLineDash([15, 15]);
+            ctx.moveTo(canvas.width / 2, 0);
+            ctx.lineTo(canvas.width / 2, canvas.height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 2. Draw Particles
+            particles.forEach((p, i) => {
+                p.update();
+                p.draw(ctx);
+                if (p.life <= 0) particles.splice(i, 1);
+            });
+
+            // 3. Draw Paddles
+            renderPaddle(roomData.p1.x, canvas.height - 50, var(--p1-color)); // P1
+            renderPaddle(roomData.p2.x, 50, var(--p2-color)); // P2
+
+            // 4. Draw Ball
+            renderBall(roomData.ball.x, roomData.ball.y);
+
+            ctx.restore();
+            
+            updatePhysics();
+            requestAnimationFrame(draw);
+        }
+
+        function renderPaddle(x, y, color) {
+            // Shadow
+            ctx.fillStyle = "rgba(0,0,0,0.2)";
+            ctx.beginPath();
+            ctx.arc(x + 5, y + 5, PADDLE_RADIUS, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Handle
+            ctx.fillStyle = "#333";
+            const hX = x - 6;
+            const hY = y > canvas.height / 2 ? y + 20 : y - 60;
+            ctx.fillRect(hX, hY, 12, 40);
+
+            // Racket Head
+            ctx.beginPath();
+            ctx.arc(x, y, PADDLE_RADIUS, 0, Math.PI * 2);
+            const grad = ctx.createRadialGradient(x-10, y-10, 5, x, y, PADDLE_RADIUS);
+            grad.addColorStop(0, '#fff');
+            grad.addColorStop(1, color);
+            ctx.fillStyle = grad;
+            ctx.fill();
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 4;
+            ctx.stroke();
+        }
+
+        function renderBall(x, y) {
+            // Trail
+            ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+            ctx.beginPath();
+            ctx.arc(x - roomData.ball.dx*2, y - roomData.ball.dy*2, BALL_RADIUS * 0.8, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Ball Body
+            ctx.beginPath();
+            ctx.arc(x, y, BALL_RADIUS, 0, Math.PI * 2);
+            ctx.fillStyle = "#fff176";
+            ctx.fill();
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        // Start
+        document.getElementById('start-btn').onclick = () => {
+            joinGame();
+            document.getElementById('status-indicator').innerText = "Entering Room...";
+        };
+
+        draw();
+
+    </script>
+</body>
+</html>
